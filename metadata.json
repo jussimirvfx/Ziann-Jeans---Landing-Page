@@ -1,0 +1,8 @@
+{
+  "name": "Remix Ziann Jeans - Landing Page - Copy",
+  "description": "Landing page B2B oficial Ziann Jeans para lojistas multimarcas.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
