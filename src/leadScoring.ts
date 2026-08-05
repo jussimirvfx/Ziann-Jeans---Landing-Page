@@ -34,7 +34,7 @@ export type LeadScoreResult = {
   lead_score_config_version: string;
 };
 
-const LEAD_SCORE_CONFIG_VERSION = 'ziann-2026-08-05';
+const LEAD_SCORE_CONFIG_VERSION = 'ziann-2026-08-05-loja-fisica-nao-desqualifica';
 const QUALIFICATION_THRESHOLD = 50;
 
 export const BRAZILIAN_PRIORITY_STATES = [
@@ -240,17 +240,16 @@ export const calculateLeadScoreDetails = (formData: LeadFormData): LeadScoreResu
   const hasPhysicalStore = normalizeText(formData.possuiLojaFisica) === 'sim';
   const physicalStorePoints = hasPhysicalStore ? 34 : 5;
   score += physicalStorePoints;
-  if (!hasPhysicalStore) {
-    disqualificationReasons.push('Lead desqualificado: nao possui loja fisica.');
-  }
   scoreBreakdown.push({
     field: 'possuiLojaFisica',
     question: 'Possui loja fisica?',
     answer: hasPhysicalStore ? 'Sim' : 'Nao',
     points: physicalStorePoints,
     maxPoints: 34,
-    disqualifies: !hasPhysicalStore,
-    reason: hasPhysicalStore ? 'Loja fisica informada.' : 'A regra desqualifica quem nao possui loja fisica.',
+    disqualifies: false,
+    reason: hasPhysicalStore
+      ? 'Loja fisica informada.'
+      : 'Nao possuir loja fisica nao desqualifica este lead.',
   });
 
   const cnpjTime = findOption(CNPJ_TIME_OPTIONS, formData.tempoCnpj);

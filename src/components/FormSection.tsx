@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { CheckCircle2, Send } from 'lucide-react';
+import { useMetaPixel } from '@jussimirvfx/meta-pixel-tracking';
 import {
   BRAZILIAN_STATES,
   CNPJ_TIME_OPTIONS,
@@ -100,6 +101,7 @@ const enviarParaWebhook = async (payload: unknown) => {
 };
 
 export const FormSection: React.FC = () => {
+  const { trackLead, trackLeadQualificado } = useMetaPixel();
   const [formData, setFormData] = useState<LeadFormData>({
     nomeCompleto: '',
     nomeFantasia: '',
@@ -243,6 +245,23 @@ export const FormSection: React.FC = () => {
     console.groupEnd();
   };
 
+  const enviarEventosMetaPixel = async (payload: ReturnType<typeof buildPayload>) => {
+    try {
+      await trackLead(payload);
+
+      if (payload.qualified) {
+        await trackLeadQualificado({
+          ...payload,
+          value: 100,
+          event_type: 'LeadQualificado',
+          content_name: 'Lead Qualificado Ziann',
+        });
+      }
+    } catch (error) {
+      console.warn('Falha ao enviar eventos para Meta Pixel:', error);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const nextErrors = validateForm();
@@ -264,6 +283,8 @@ export const FormSection: React.FC = () => {
       qualified: payload.qualified,
       qualificationStatus: payload.qualification_status,
     });
+
+    await enviarEventosMetaPixel(payload);
 
     try {
       await enviarParaWebhook(payload);
