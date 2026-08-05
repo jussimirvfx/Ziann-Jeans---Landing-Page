@@ -1,16 +1,114 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { CheckCircle2, Sparkles, Send } from 'lucide-react';
+import { CheckCircle2, Send } from 'lucide-react';
+import {
+  BRAZILIAN_STATES,
+  CNPJ_TIME_OPTIONS,
+  STORE_TYPE_OPTIONS,
+  calculateLeadScoreDetails,
+  cnpjMask,
+  converterParaE164,
+  getCnpjTimeLabel,
+  getStateLabel,
+  getStoreTypeLabel,
+  phoneMask,
+  type LeadFormData,
+  validarCnpjCompleto,
+  validarEmail,
+  validarTelefoneCompleto,
+} from '../leadScoring';
+
+const WEBHOOK_URL = import.meta.env.VITE_FORM_WEBHOOK_URL || '';
+const WEBHOOK_TOKEN = import.meta.env.VITE_WEBHOOK_TOKEN || '';
+
+const FIELD_ORDER: (keyof LeadFormData)[] = [
+  'nomeCompleto',
+  'nomeFantasia',
+  'whatsapp',
+  'emailCorporativo',
+  'cnpj',
+  'instagram',
+  'cidade',
+  'estado',
+  'tempoCnpj',
+  'tipoLoja',
+  'possuiLojaFisica',
+  'principaisMarcas',
+];
+
+const FIELD_LABELS: Record<keyof LeadFormData, string> = {
+  nomeCompleto: 'Nome completo',
+  nomeFantasia: 'Nome fantasia da loja',
+  whatsapp: 'WhatsApp da loja',
+  emailCorporativo: 'E-mail corporativo',
+  cnpj: 'CNPJ da loja',
+  instagram: 'Instagram da loja',
+  cidade: 'Cidade',
+  estado: 'Estado',
+  tempoCnpj: 'Tempo de CNPJ',
+  tipoLoja: 'Tipo de loja',
+  possuiLojaFisica: 'Loja fisica',
+  principaisMarcas: 'Principais marcas',
+};
+
+type FormErrors = Partial<Record<keyof LeadFormData, string>>;
+
+const registrarEnvioFormularioNoVercel = async (
+  payload: unknown,
+  context: Record<string, unknown> = {},
+) => {
+  try {
+    await fetch('/api/form-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source: 'form-submit',
+        pageUrl: window.location.href,
+        loggedAt: new Date().toISOString(),
+        context,
+        payload,
+      }),
+    });
+  } catch (error) {
+    console.warn('Falha ao registrar backup do formulario na Vercel:', error);
+  }
+};
+
+const enviarParaWebhook = async (payload: unknown) => {
+  if (!WEBHOOK_URL) {
+    console.warn('VITE_FORM_WEBHOOK_URL nao configurada; payload ficou registrado apenas no backup local.');
+    return;
+  }
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+
+  if (WEBHOOK_TOKEN) {
+    headers.Authorization = `Bearer ${WEBHOOK_TOKEN}`;
+  }
+
+  const response = await fetch(WEBHOOK_URL, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Webhook error: ${response.status}`);
+  }
+};
 
 export const FormSection: React.FC = () => {
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<LeadFormData>({
     nomeCompleto: '',
     nomeFantasia: '',
     whatsapp: '',
     emailCorporativo: '',
     cnpj: '',
     instagram: '',
-    cidadeEstado: '',
+    cidade: '',
+    estado: '',
     tempoCnpj: '',
     tipoLoja: '',
     possuiLojaFisica: '',
@@ -19,27 +117,182 @@ export const FormSection: React.FC = () => {
 
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errors, setErrors] = useState<FormErrors>({});
 
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
   ) => {
     const { name, value } = e.target;
-    setFormData((prev) => ({ ...prev, [name]: value }));
+    const fieldName = name as keyof LeadFormData;
+    const maskedValue =
+      fieldName === 'whatsapp' ? phoneMask(value) : fieldName === 'cnpj' ? cnpjMask(value) : value;
+
+    setFormData((prev) => ({ ...prev, [fieldName]: maskedValue }));
+    setErrors((prev) => ({ ...prev, [fieldName]: undefined }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const validateForm = () => {
+    const nextErrors: FormErrors = {};
+
+    FIELD_ORDER.forEach((field) => {
+      if (!formData[field].trim()) {
+        nextErrors[field] = `${FIELD_LABELS[field]} e obrigatorio.`;
+      }
+    });
+
+    if (formData.nomeCompleto.trim() && formData.nomeCompleto.trim().split(/\s+/).length < 2) {
+      nextErrors.nomeCompleto = 'Informe nome e sobrenome.';
+    }
+
+    if (formData.emailCorporativo.trim() && !validarEmail(formData.emailCorporativo)) {
+      nextErrors.emailCorporativo = 'Informe um e-mail valido.';
+    }
+
+    if (formData.whatsapp.trim()) {
+      const phoneValidation = validarTelefoneCompleto(formData.whatsapp);
+      if (!phoneValidation.valido) {
+        nextErrors.whatsapp = phoneValidation.erro;
+      }
+    }
+
+    if (formData.cnpj.trim() && !validarCnpjCompleto(formData.cnpj)) {
+      nextErrors.cnpj = 'Informe um CNPJ com 14 digitos no formato 00.000.000/0000-00.';
+    }
+
+    return nextErrors;
+  };
+
+  const focusFirstError = (nextErrors: FormErrors) => {
+    const firstInvalidField = FIELD_ORDER.find((field) => nextErrors[field]);
+    if (!firstInvalidField) return;
+
+    window.setTimeout(() => {
+      const wrapper = document.getElementById(`field-${firstInvalidField}`);
+      const control = wrapper?.querySelector<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
+        'input, select, textarea',
+      );
+
+      wrapper?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      control?.focus({ preventScroll: true });
+    }, 50);
+  };
+
+  const buildPayload = () => {
+    const scoreDetails = calculateLeadScoreDetails(formData);
+    const timestamp = new Date().toISOString();
+
+    return {
+      name: formData.nomeCompleto.trim(),
+      nome: formData.nomeCompleto.trim(),
+      store_name: formData.nomeFantasia.trim(),
+      nome_fantasia: formData.nomeFantasia.trim(),
+      email: formData.emailCorporativo.trim(),
+      email_corporativo: formData.emailCorporativo.trim(),
+      phone: converterParaE164(formData.whatsapp),
+      whatsapp: formData.whatsapp,
+      cnpj: formData.cnpj,
+      instagram: formData.instagram.trim(),
+      city: formData.cidade.trim(),
+      cidade: formData.cidade.trim(),
+      state: formData.estado,
+      estado: formData.estado,
+      estado_nome: getStateLabel(formData.estado),
+      city_state: `${formData.cidade.trim()} / ${formData.estado}`,
+      cidade_estado: `${formData.cidade.trim()} / ${formData.estado}`,
+      tempo_cnpj: getCnpjTimeLabel(formData.tempoCnpj),
+      tempo_cnpj_value: formData.tempoCnpj,
+      tipo_loja: getStoreTypeLabel(formData.tipoLoja),
+      tipo_loja_value: formData.tipoLoja,
+      possui_loja_fisica: formData.possuiLojaFisica,
+      principais_marcas: formData.principaisMarcas.trim(),
+      value: scoreDetails.value,
+      currency: 'BRL',
+      content_name: 'Formulario de Contato Ziann',
+      content_category: 'Lead Generation',
+      lead_score: scoreDetails.score,
+      lead_score_details: scoreDetails.score_breakdown,
+      lead_score_config_version: scoreDetails.lead_score_config_version,
+      qualified: scoreDetails.qualified,
+      qualification_status: scoreDetails.qualification_status,
+      qualification_threshold: scoreDetails.qualification_threshold,
+      disqualification_reasons: scoreDetails.disqualification_reasons,
+      score_summary: {
+        total: scoreDetails.score,
+        value: scoreDetails.value,
+        qualified: scoreDetails.qualified,
+        status: scoreDetails.qualification_status,
+        reasons: scoreDetails.disqualification_reasons,
+      },
+      timestamp,
+      source: 'landing-page',
+      user_agent: navigator.userAgent,
+      page_url: window.location.href,
+      referrer: document.referrer || 'direct',
+    };
+  };
+
+  const logLeadScoreNoConsole = (payload: ReturnType<typeof buildPayload>) => {
+    console.groupCollapsed('[Ziann] Lead score calculado');
+    console.info('Nota final:', payload.lead_score);
+    console.info('Value enviado:', payload.value);
+    console.info('Status:', payload.qualification_status);
+    console.info('Qualificado:', payload.qualified ? 'Sim' : 'Nao');
+    console.info('Motivos de desqualificacao:', payload.disqualification_reasons.length ? payload.disqualification_reasons : 'Nenhum');
+    console.table(payload.lead_score_details);
+    console.info('Payload completo:', payload);
+    console.groupEnd();
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const nextErrors = validateForm();
+    setErrors(nextErrors);
+
+    if (Object.keys(nextErrors).length > 0) {
+      focusFirstError(nextErrors);
+      return;
+    }
+
     setIsSubmitting(true);
 
-    // Fast, fluid transmission delay
-    setTimeout(() => {
+    const payload = buildPayload();
+    logLeadScoreNoConsole(payload);
+
+    await registrarEnvioFormularioNoVercel(payload, {
+      webhookUrl: WEBHOOK_URL || null,
+      leadScore: payload.lead_score,
+      qualified: payload.qualified,
+      qualificationStatus: payload.qualification_status,
+    });
+
+    try {
+      await enviarParaWebhook(payload);
+    } catch (error) {
+      console.error('Erro ao enviar para webhook:', error);
+    } finally {
       setIsSubmitting(false);
       setIsSubmitted(true);
-    }, 700);
+    }
   };
 
+  const fieldClassName = (field: keyof LeadFormData, baseClassName: string) =>
+    `${baseClassName} ${errors[field] ? 'ring-2 ring-red-700 focus:ring-red-700' : ''}`;
+
+  const fieldErrorProps = (field: keyof LeadFormData) => ({
+    'aria-invalid': Boolean(errors[field]),
+    'aria-describedby': errors[field] ? `error-${field}` : undefined,
+  });
+
+  const renderFieldError = (field: keyof LeadFormData) =>
+    errors[field] ? (
+      <p id={`error-${field}`} className="mt-2 text-xs font-bold text-red-800" role="alert">
+        {errors[field]}
+      </p>
+    ) : null;
+
   return (
-    <section id="formulario-captura" className="py-20 bg-black relative overflow-hidden">
+    <section id="cta-form" className="py-20 bg-black relative overflow-hidden">
+      <span id="formulario-captura" className="absolute top-0" aria-hidden="true" />
       {/* Background Image */}
       <div className="absolute inset-0 z-0">
         <img
@@ -86,12 +339,13 @@ export const FormSection: React.FC = () => {
                 exit={{ opacity: 0, y: -15, scale: 0.98, filter: 'blur(4px)' }}
                 transition={{ duration: 0.25, ease: 'easeOut' }}
                 onSubmit={handleSubmit}
+                noValidate
                 className="space-y-6"
               >
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                   
                   {/* 1. Nome Completo do Proprietário / Comprador */}
-                  <div className="sm:col-span-2">
+                  <div id="field-nomeCompleto" className="sm:col-span-2">
                     <label className="block text-xs font-bold text-neutral-900 uppercase tracking-wider mb-2">
                       Nome Completo do Proprietário / Comprador
                     </label>
@@ -102,12 +356,14 @@ export const FormSection: React.FC = () => {
                       value={formData.nomeCompleto}
                       onChange={handleChange}
                       placeholder="Ex: Roberto Silva"
-                      className="w-full px-4 py-3 rounded-none bg-white border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-1 focus:ring-black transition-all text-sm shadow-sm"
+                      className={fieldClassName('nomeCompleto', 'w-full px-4 py-3 rounded-none bg-white border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-1 focus:ring-black transition-all text-sm shadow-sm')}
+                      {...fieldErrorProps('nomeCompleto')}
                     />
+                    {renderFieldError('nomeCompleto')}
                   </div>
 
                   {/* 2. Nome Fantasia da Loja */}
-                  <div>
+                  <div id="field-nomeFantasia">
                     <label className="block text-xs font-bold text-neutral-900 uppercase tracking-wider mb-2">
                       Nome Fantasia da Loja
                     </label>
@@ -118,12 +374,14 @@ export const FormSection: React.FC = () => {
                       value={formData.nomeFantasia}
                       onChange={handleChange}
                       placeholder="Ex: Boutique Elegance"
-                      className="w-full px-4 py-3 rounded-none bg-white border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-1 focus:ring-black transition-all text-sm shadow-sm"
+                      className={fieldClassName('nomeFantasia', 'w-full px-4 py-3 rounded-none bg-white border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-1 focus:ring-black transition-all text-sm shadow-sm')}
+                      {...fieldErrorProps('nomeFantasia')}
                     />
+                    {renderFieldError('nomeFantasia')}
                   </div>
 
                   {/* 3. WhatsApp da Loja (com DDD) */}
-                  <div>
+                  <div id="field-whatsapp">
                     <label className="block text-xs font-bold text-neutral-900 uppercase tracking-wider mb-2">
                       WhatsApp da Loja (com DDD)
                     </label>
@@ -134,12 +392,16 @@ export const FormSection: React.FC = () => {
                       value={formData.whatsapp}
                       onChange={handleChange}
                       placeholder="Ex: (11) 99999-8888"
-                      className="w-full px-4 py-3 rounded-none bg-white border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-1 focus:ring-black transition-all text-sm shadow-sm"
+                      inputMode="numeric"
+                      maxLength={15}
+                      className={fieldClassName('whatsapp', 'w-full px-4 py-3 rounded-none bg-white border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-1 focus:ring-black transition-all text-sm shadow-sm')}
+                      {...fieldErrorProps('whatsapp')}
                     />
+                    {renderFieldError('whatsapp')}
                   </div>
 
                   {/* 4. E-mail Corporativo */}
-                  <div>
+                  <div id="field-emailCorporativo">
                     <label className="block text-xs font-bold text-neutral-900 uppercase tracking-wider mb-2">
                       E-mail Corporativo
                     </label>
@@ -150,12 +412,14 @@ export const FormSection: React.FC = () => {
                       value={formData.emailCorporativo}
                       onChange={handleChange}
                       placeholder="comercial@sualoja.com.br"
-                      className="w-full px-4 py-3 rounded-none bg-white border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-1 focus:ring-black transition-all text-sm shadow-sm"
+                      className={fieldClassName('emailCorporativo', 'w-full px-4 py-3 rounded-none bg-white border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-1 focus:ring-black transition-all text-sm shadow-sm')}
+                      {...fieldErrorProps('emailCorporativo')}
                     />
+                    {renderFieldError('emailCorporativo')}
                   </div>
 
                   {/* 5. CNPJ da Loja */}
-                  <div>
+                  <div id="field-cnpj">
                     <label className="block text-xs font-bold text-neutral-900 uppercase tracking-wider mb-2">
                       CNPJ da Loja
                     </label>
@@ -166,12 +430,16 @@ export const FormSection: React.FC = () => {
                       value={formData.cnpj}
                       onChange={handleChange}
                       placeholder="00.000.000/0001-00"
-                      className="w-full px-4 py-3 rounded-none bg-white border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-1 focus:ring-black transition-all text-sm shadow-sm"
+                      inputMode="numeric"
+                      maxLength={18}
+                      className={fieldClassName('cnpj', 'w-full px-4 py-3 rounded-none bg-white border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-1 focus:ring-black transition-all text-sm shadow-sm')}
+                      {...fieldErrorProps('cnpj')}
                     />
+                    {renderFieldError('cnpj')}
                   </div>
 
                   {/* 6. @ Instagram da Loja */}
-                  <div>
+                  <div id="field-instagram">
                     <label className="block text-xs font-bold text-neutral-900 uppercase tracking-wider mb-2">
                       @ Instagram da Loja
                     </label>
@@ -182,28 +450,55 @@ export const FormSection: React.FC = () => {
                       value={formData.instagram}
                       onChange={handleChange}
                       placeholder="@sualoja.oficial"
-                      className="w-full px-4 py-3 rounded-none bg-white border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-1 focus:ring-black transition-all text-sm shadow-sm"
+                      className={fieldClassName('instagram', 'w-full px-4 py-3 rounded-none bg-white border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-1 focus:ring-black transition-all text-sm shadow-sm')}
+                      {...fieldErrorProps('instagram')}
                     />
+                    {renderFieldError('instagram')}
                   </div>
 
-                  {/* 7. Cidade / Estado */}
-                  <div>
+                  {/* 7. Cidade */}
+                  <div id="field-cidade">
                     <label className="block text-xs font-bold text-neutral-900 uppercase tracking-wider mb-2">
-                      Cidade / Estado
+                      Cidade
                     </label>
                     <input
                       type="text"
-                      name="cidadeEstado"
+                      name="cidade"
                       required
-                      value={formData.cidadeEstado}
+                      value={formData.cidade}
                       onChange={handleChange}
-                      placeholder="Ex: São Paulo / SP"
-                      className="w-full px-4 py-3 rounded-none bg-white border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-1 focus:ring-black transition-all text-sm shadow-sm"
+                      placeholder="Ex: Sao Paulo"
+                      className={fieldClassName('cidade', 'w-full px-4 py-3 rounded-none bg-white border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-1 focus:ring-black transition-all text-sm shadow-sm')}
+                      {...fieldErrorProps('cidade')}
                     />
+                    {renderFieldError('cidade')}
+                  </div>
+
+                  {/* 8. Estado */}
+                  <div id="field-estado">
+                    <label className="block text-xs font-bold text-neutral-900 uppercase tracking-wider mb-2">
+                      Estado
+                    </label>
+                    <select
+                      name="estado"
+                      required
+                      value={formData.estado}
+                      onChange={handleChange}
+                      className={fieldClassName('estado', 'w-full px-4 py-3 rounded-none bg-white border-0 text-neutral-900 focus:outline-none focus:ring-1 focus:ring-black transition-all text-sm shadow-sm')}
+                      {...fieldErrorProps('estado')}
+                    >
+                      <option value="" disabled>Selecione</option>
+                      {BRAZILIAN_STATES.map((state) => (
+                        <option key={state.value} value={state.value}>
+                          {state.label}
+                        </option>
+                      ))}
+                    </select>
+                    {renderFieldError('estado')}
                   </div>
 
                   {/* 8. Tempo de CNPJ */}
-                  <div>
+                  <div id="field-tempoCnpj">
                     <label className="block text-xs font-bold text-neutral-900 uppercase tracking-wider mb-2">
                       Tempo de CNPJ
                     </label>
@@ -212,17 +507,21 @@ export const FormSection: React.FC = () => {
                       required
                       value={formData.tempoCnpj}
                       onChange={handleChange}
-                      className="w-full px-4 py-3 rounded-none bg-white border-0 text-neutral-900 focus:outline-none focus:ring-1 focus:ring-black transition-all text-sm shadow-sm"
+                      className={fieldClassName('tempoCnpj', 'w-full px-4 py-3 rounded-none bg-white border-0 text-neutral-900 focus:outline-none focus:ring-1 focus:ring-black transition-all text-sm shadow-sm')}
+                      {...fieldErrorProps('tempoCnpj')}
                     >
-                      <option value="" disabled>Selecione o tempo</option>
-                      <option value="De 1 a 2 anos">De 1 a 2 anos</option>
-                      <option value="De 2 a 5 anos">De 2 a 5 anos</option>
-                      <option value="Mais de 5 anos">Mais de 5 anos</option>
+                      <option value="" disabled>Selecione</option>
+                      {CNPJ_TIME_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
                     </select>
+                    {renderFieldError('tempoCnpj')}
                   </div>
 
                   {/* 9. Tipo de Loja */}
-                  <div>
+                  <div id="field-tipoLoja">
                     <label className="block text-xs font-bold text-neutral-900 uppercase tracking-wider mb-2">
                       Tipo de Loja
                     </label>
@@ -231,22 +530,29 @@ export const FormSection: React.FC = () => {
                       required
                       value={formData.tipoLoja}
                       onChange={handleChange}
-                      className="w-full px-4 py-3 rounded-none bg-white border-0 text-neutral-900 focus:outline-none focus:ring-1 focus:ring-black transition-all text-sm shadow-sm"
+                      className={fieldClassName('tipoLoja', 'w-full px-4 py-3 rounded-none bg-white border-0 text-neutral-900 focus:outline-none focus:ring-1 focus:ring-black transition-all text-sm shadow-sm')}
+                      {...fieldErrorProps('tipoLoja')}
                     >
-                      <option value="" disabled>Selecione o tipo de loja</option>
-                      <option value="Multimarcas">Multimarcas</option>
-                      <option value="Loja de Shopping">Loja de Shopping</option>
-                      <option value="Magazine">Magazine</option>
-                      <option value="Loja Online">Loja Online</option>
+                      <option value="" disabled>Selecione</option>
+                      {STORE_TYPE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
                     </select>
+                    {renderFieldError('tipoLoja')}
                   </div>
 
                   {/* 10. Possui Loja Física? */}
-                  <div className="sm:col-span-2">
+                  <div id="field-possuiLojaFisica" className="sm:col-span-2">
                     <label className="block text-xs font-bold text-neutral-900 uppercase tracking-wider mb-2">
                       Possui Loja Física?
                     </label>
-                    <div className="flex gap-6 items-center pt-1">
+                    <div
+                      className="flex gap-6 items-center pt-1"
+                      role="radiogroup"
+                      {...fieldErrorProps('possuiLojaFisica')}
+                    >
                       <label className="flex items-center gap-2 cursor-pointer text-sm font-semibold text-neutral-900">
                         <input
                           type="radio"
@@ -272,10 +578,11 @@ export const FormSection: React.FC = () => {
                         <span>Não</span>
                       </label>
                     </div>
+                    {renderFieldError('possuiLojaFisica')}
                   </div>
 
                   {/* 11. Principais marcas que sua loja revende atualmente */}
-                  <div className="sm:col-span-2">
+                  <div id="field-principaisMarcas" className="sm:col-span-2">
                     <label className="block text-xs font-bold text-neutral-900 uppercase tracking-wider mb-2">
                       Principais marcas que sua loja revende atualmente
                     </label>
@@ -286,8 +593,10 @@ export const FormSection: React.FC = () => {
                       value={formData.principaisMarcas}
                       onChange={handleChange}
                       placeholder="Ex: Marca A, Marca B, Marca C..."
-                      className="w-full px-4 py-3 rounded-none bg-white border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-1 focus:ring-black transition-all text-sm resize-none shadow-sm"
+                      className={fieldClassName('principaisMarcas', 'w-full px-4 py-3 rounded-none bg-white border-0 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-1 focus:ring-black transition-all text-sm resize-none shadow-sm')}
+                      {...fieldErrorProps('principaisMarcas')}
                     />
+                    {renderFieldError('principaisMarcas')}
                   </div>
 
                 </div>
@@ -340,26 +649,6 @@ export const FormSection: React.FC = () => {
                   <h3 className="text-2xl font-black text-neutral-900 mb-2 uppercase tracking-tight font-sans">
                     Cadastro Enviado com Sucesso!
                   </h3>
-                  <p className="text-neutral-800 text-sm max-w-lg mx-auto leading-relaxed font-sans">
-                    Recebemos os dados de <strong className="text-black font-bold">{formData.nomeFantasia}</strong> ({formData.cidadeEstado}). Nossa equipe B2B verificará a disponibilidade de praça e enviará o catálogo da <strong className="text-black font-bold">Coleção Blue Motion</strong> diretamente para o seu WhatsApp e e-mail corporativo.
-                  </p>
-                </div>
-
-                <div className="bg-white/80 p-4 rounded-none border border-black/10 max-w-md mx-auto text-left text-xs text-neutral-800 space-y-1.5 shadow-sm font-sans">
-                  <div><strong className="text-black">Responsável:</strong> {formData.nomeCompleto}</div>
-                  <div><strong className="text-black">WhatsApp:</strong> {formData.whatsapp}</div>
-                  <div><strong className="text-black">E-mail:</strong> {formData.emailCorporativo}</div>
-                  <div><strong className="text-black">CNPJ:</strong> {formData.cnpj}</div>
-                </div>
-
-                <div className="pt-2">
-                  <button
-                    onClick={() => setIsSubmitted(false)}
-                    className="inline-flex items-center gap-2 px-6 py-3 text-xs font-bold text-white uppercase tracking-wider bg-black hover:bg-neutral-900 rounded-none transition-all cursor-pointer shadow-md active:scale-95"
-                  >
-                    <Sparkles className="w-4 h-4 text-white" />
-                    <span>Enviar outro cadastro</span>
-                  </button>
                 </div>
               </motion.div>
             )}

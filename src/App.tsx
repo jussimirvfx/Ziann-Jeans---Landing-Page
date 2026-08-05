@@ -9,14 +9,19 @@ import { TestimonialSection } from './components/TestimonialSection';
 import { FormSection } from './components/FormSection';
 import { Footer } from './components/Footer';
 import { BlueMotionModal } from './components/BlueMotionModal';
+import { WhatsAppFloatingButtonScroll } from './components/WhatsAppFloatingButtonScroll';
 
 export default function App() {
   const [isBlueMotionModalOpen, setIsBlueMotionModalOpen] = useState(false);
 
   const scrollToForm = () => {
-    const formElement = document.getElementById('formulario-captura');
+    const formElement = document.getElementById('cta-form') || document.getElementById('formulario-captura');
     if (formElement) {
-      formElement.scrollIntoView({ behavior: 'smooth' });
+      formElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      const firstInput = formElement.querySelector<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
+        'input, select, textarea',
+      );
+      window.setTimeout(() => firstInput?.focus({ preventScroll: true }), 700);
     }
   };
 
@@ -60,6 +65,7 @@ export default function App() {
         onClose={() => setIsBlueMotionModalOpen(false)}
         onScrollToForm={scrollToForm}
       />
+      <WhatsAppFloatingButtonScroll formId="cta-form" brandName="Ziann" />
     </div>
   );
 }
