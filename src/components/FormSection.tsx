@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { CheckCircle2, Send } from 'lucide-react';
+import { CheckCircle2, Send, XCircle } from 'lucide-react';
 import { useMetaPixel } from '@jussimirvfx/meta-pixel-tracking';
 import {
   BRAZILIAN_STATES,
@@ -53,6 +53,7 @@ const FIELD_LABELS: Record<keyof LeadFormData, string> = {
 };
 
 type FormErrors = Partial<Record<keyof LeadFormData, string>>;
+type SubmissionStatus = 'qualified' | 'disqualified';
 
 const registrarEnvioFormularioNoVercel = async (
   payload: unknown,
@@ -119,6 +120,7 @@ export const FormSection: React.FC = () => {
 
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submissionStatus, setSubmissionStatus] = useState<SubmissionStatus>('qualified');
   const [errors, setErrors] = useState<FormErrors>({});
 
   const handleChange = (
@@ -272,9 +274,16 @@ export const FormSection: React.FC = () => {
       return;
     }
 
-    setIsSubmitting(true);
-
     const payload = buildPayload();
+
+    if (payload.tipo_loja_value === 'autonomo') {
+      logLeadScoreNoConsole(payload);
+      setSubmissionStatus('disqualified');
+      setIsSubmitted(true);
+      return;
+    }
+
+    setIsSubmitting(true);
     logLeadScoreNoConsole(payload);
 
     await registrarEnvioFormularioNoVercel(payload, {
@@ -292,6 +301,7 @@ export const FormSection: React.FC = () => {
       console.error('Erro ao enviar para webhook:', error);
     } finally {
       setIsSubmitting(false);
+      setSubmissionStatus('qualified');
       setIsSubmitted(true);
     }
   };
@@ -648,6 +658,36 @@ export const FormSection: React.FC = () => {
                 </div>
 
               </motion.form>
+            ) : submissionStatus === 'disqualified' ? (
+              <motion.div
+                key="form-disqualified"
+                initial={{ opacity: 0, y: 20, scale: 0.96, filter: 'blur(6px)' }}
+                animate={{ opacity: 1, y: 0, scale: 1, filter: 'blur(0px)' }}
+                exit={{ opacity: 0, y: 15 }}
+                transition={{ type: 'spring', stiffness: 280, damping: 22, mass: 0.8 }}
+                className="text-center py-8 space-y-6"
+              >
+                <motion.div
+                  initial={{ scale: 0.5, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  transition={{ type: 'spring', stiffness: 350, damping: 18, delay: 0.1 }}
+                  className="w-20 h-20 bg-red-700 text-white rounded-none flex items-center justify-center mx-auto shadow-xl relative"
+                >
+                  <XCircle className="w-12 h-12 stroke-[2.5] text-white" />
+                </motion.div>
+
+                <div className="max-w-2xl mx-auto space-y-5 text-neutral-900">
+                  <p className="text-base sm:text-lg font-semibold leading-relaxed">
+                    Infelizmente, informamos que o seu cadastro não foi selecionado para avançarmos neste momento.
+                  </p>
+                  <p className="text-base sm:text-lg font-semibold leading-relaxed">
+                    Como nosso processo de entrada passa por uma curadoria interna, não conseguiremos seguir com a parceria agora.
+                  </p>
+                  <p className="text-base sm:text-lg font-semibold leading-relaxed">
+                    Agradecemos o seu interesse na nossa marca e desejamos muito sucesso!
+                  </p>
+                </div>
+              </motion.div>
             ) : (
               <motion.div
                 key="form-success"
@@ -661,9 +701,9 @@ export const FormSection: React.FC = () => {
                   initial={{ scale: 0.5, opacity: 0 }}
                   animate={{ scale: 1, opacity: 1 }}
                   transition={{ type: 'spring', stiffness: 350, damping: 18, delay: 0.1 }}
-                  className="w-20 h-20 bg-black text-white rounded-none flex items-center justify-center mx-auto shadow-xl relative"
+                  className="w-20 h-20 bg-green-700 text-white rounded-none flex items-center justify-center mx-auto shadow-xl relative"
                 >
-                  <CheckCircle2 className="w-10 h-10 stroke-[2.5] text-white" />
+                  <CheckCircle2 className="w-12 h-12 stroke-[2.5] text-white" />
                 </motion.div>
 
                 <div>
